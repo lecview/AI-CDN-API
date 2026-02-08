@@ -13,7 +13,7 @@ app = FastAPI()
 # 配置
 # =========================
 # 服务器A的地址（您的 claude-code-hub 主服务）
-UPSTREAM_SERVER_A = os.getenv("UPSTREAM_SERVER_A", "http://服务器A的IP:端口")
+UPSTREAM_SERVER_A = "https://api.aimasker.com"
 
 # 连接超时设置
 CONNECT_TIMEOUT_SEC = float(os.getenv("CONNECT_TIMEOUT_SEC", "20"))
