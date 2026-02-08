@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  proxy-forwarder:
+    build: .
+    container_name: proxy-forwarder
+    ports:
+      - "8000:8000"
+    environment:
+      - UPSTREAM_SERVER_A=${UPSTREAM_SERVER_A}
+      - PORT=8000
+      - CONNECT_TIMEOUT_SEC=${CONNECT_TIMEOUT_SEC:-20}
+      - UPSTREAM_TIMEOUT_SEC=${UPSTREAM_TIMEOUT_SEC:-300}
+      - DEBUG_LOG=${DEBUG_LOG:-1}
+    restart: unless-stopped
+    networks:
+      - proxy-network
+
+networks:
+  proxy-network:
+    driver: bridge
