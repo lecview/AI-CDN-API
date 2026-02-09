@@ -3,55 +3,60 @@ name: Docker Build & Push to GHCR
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]           # 推送 v1.0.0 这种 tag 时也会触发
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:         # 允许手动触发
+    tags:     [ "v*" ]          # v1.2.3、v2.0.0-beta.1 等都会触发
+  workflow_dispatch:            # 允许你手动在 Actions 页面点一下运行（测试用）
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write        # 必须有这个权限才能推送到 ghcr.io
+      packages: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up QEMU (for multi-arch)
+      - name: Set up QEMU (支持多架构)
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GitHub Container Registry
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata (tags & labels)
+      - name: Docker metadata (自动生成 tags 和 labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=true
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=ref,event=pr,prefix=pr-
+            # 来自 git tag 的语义版本（最重要）
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
-      - name: Build and push Docker image
+            # main 分支 push 时推 latest
+            type=raw,value=latest,enable={{is_default_branch}}
+
+            # 可选：每次 push main 也带一个 commit sha 的 tag（调试用）
+            # type=sha,prefix=sha-
+
+      - name: Build & Push
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile           # 如果 Dockerfile 不在根目录，改这里
-          push: ${{ github.event_name != 'pull_request' }}
+          file: ./Dockerfile                  # 如果 Dockerfile 不在根目录，改这里
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64   # 多架构，可选，第一次可去掉
+          platforms: linux/amd64,linux/arm64  # 建议保留，构建慢一次，后续快很多
           cache-from: type=gha
           cache-to: type=gha,mode=max
