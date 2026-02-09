@@ -14,17 +14,47 @@ app.state.max_body_size = 100 * 1024 * 1024  # 100 MB
 # =========================
 # 配置
 # =========================
-VERSION = "v1.3.0"  # 版本号，每次更新时修改
+VERSION = "v1.4.0-连接池优化版"  # 版本号，每次更新时修改
 
 # 服务器A的地址（您的 claude-code-hub 主服务）
 UPSTREAM_SERVER_A = "https://api.aimasker.com"
 
 # 连接超时设置（秒）
-CONNECT_TIMEOUT_SEC = 30
+CONNECT_TIMEOUT_SEC = 10  # 减少到 10 秒，连接应该很快
 UPSTREAM_TIMEOUT_SEC = 600  # 增加到 10 分钟，支持大图片传输
 
 # 调试日志（True=开启，False=关闭）
 DEBUG_LOG = True
+
+# 全局 aiohttp Session（复用连接，提升性能）
+_http_session: aiohttp.ClientSession | None = None
+
+
+async def get_http_session() -> aiohttp.ClientSession:
+    """获取全局 HTTP Session（带连接池）"""
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        # 配置 TCP 连接器，启用连接池
+        connector = aiohttp.TCPConnector(
+            limit=100,  # 最大 100 个连接
+            limit_per_host=30,  # 每个主机最多 30 个连接
+            ttl_dns_cache=300,  # DNS 缓存 5 分钟
+            enable_cleanup_closed=True,
+        )
+        
+        # 配置超时
+        timeout = aiohttp.ClientTimeout(
+            total=UPSTREAM_TIMEOUT_SEC,
+            connect=CONNECT_TIMEOUT_SEC
+        )
+        
+        _http_session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout
+        )
+        log(f"[init] ✓ HTTP session created with connection pool")
+    
+    return _http_session
 
 
 def log(msg: str):
@@ -46,10 +76,10 @@ async def root():
 async def models():
     """返回模型列表（透传到服务器A）"""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{UPSTREAM_SERVER_A}/v1/models") as resp:
-                data = await resp.json()
-                return JSONResponse(content=data)
+        session = await get_http_session()
+        async with session.get(f"{UPSTREAM_SERVER_A}/v1/models") as resp:
+            data = await resp.json()
+            return JSONResponse(content=data)
     except Exception as e:
         return JSONResponse(
             status_code=502,
@@ -61,10 +91,10 @@ async def models():
 async def models_with_uid(uid: str):
     """返回模型列表（带 UID）"""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{UPSTREAM_SERVER_A}/{uid}/v1/models") as resp:
-                data = await resp.json()
-                return JSONResponse(content=data)
+        session = await get_http_session()
+        async with session.get(f"{UPSTREAM_SERVER_A}/{uid}/v1/models") as resp:
+            data = await resp.json()
+            return JSONResponse(content=data)
     except Exception as e:
         return JSONResponse(
             status_code=502,
@@ -139,19 +169,13 @@ async def chat_proxy(uid: str | None, req: Request):
                     auth_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
                     log(f"[stream] Authorization: {auth_preview}")
             
-            # 创建超时配置
-            timeout = aiohttp.ClientTimeout(
-                total=UPSTREAM_TIMEOUT_SEC,
-                connect=CONNECT_TIMEOUT_SEC
-            )
-            
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(upstream_url, headers=headers, json=body) as resp:
-                        log(f"[stream] ← connected (status={resp.status})")
-                        
-                        # 逐块读取并实时转发
-                        chunk_count = 0
+                session = await get_http_session()
+                async with session.post(upstream_url, headers=headers, json=body) as resp:
+                    log(f"[stream] ← connected (status={resp.status})")
+                    
+                    # 逐块读取并实时转发
+                    chunk_count = 0
                         async for chunk in resp.content.iter_any():
                             if chunk:
                                 chunk_count += 1
@@ -198,19 +222,13 @@ async def chat_proxy(uid: str | None, req: Request):
                 auth_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
                 log(f"[forward] Authorization: {auth_preview}")
         
-        # 创建超时配置
-        timeout = aiohttp.ClientTimeout(
-            total=UPSTREAM_TIMEOUT_SEC,
-            connect=CONNECT_TIMEOUT_SEC
-        )
-        
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(upstream_url, headers=headers, json=body) as resp:
-                    status = resp.status
-                    
-                    try:
-                        data = await resp.json()
+            session = await get_http_session()
+            async with session.post(upstream_url, headers=headers, json=body) as resp:
+                status = resp.status
+                
+                try:
+                    data = await resp.json()
                         log(f"[forward] ← JSON response (status={status})")
                         return JSONResponse(status_code=status, content=data)
                     except Exception:
