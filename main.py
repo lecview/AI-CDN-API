@@ -15,12 +15,12 @@ app = FastAPI()
 # 服务器A的地址（您的 claude-code-hub 主服务）
 UPSTREAM_SERVER_A = "https://api.aimasker.com"
 
-# 连接超时设置
-CONNECT_TIMEOUT_SEC = float(os.getenv("CONNECT_TIMEOUT_SEC", "20"))
-UPSTREAM_TIMEOUT_SEC = float(os.getenv("UPSTREAM_TIMEOUT_SEC", "300"))
+# 连接超时设置（秒）
+CONNECT_TIMEOUT_SEC = 20
+UPSTREAM_TIMEOUT_SEC = 300
 
-# 调试日志
-DEBUG_LOG = os.getenv("DEBUG_LOG", "1").strip().lower() in ("1", "true", "yes")
+# 调试日志（True=开启，False=关闭）
+DEBUG_LOG = True
 
 
 def log(msg: str):
@@ -205,5 +205,4 @@ async def chat_proxy(uid: str | None, req: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
