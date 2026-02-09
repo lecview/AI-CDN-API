@@ -14,7 +14,7 @@ app.state.max_body_size = 100 * 1024 * 1024  # 100 MB
 # =========================
 # 配置
 # =========================
-VERSION = "v1.2.0-img"  # 版本号，每次更新时修改
+VERSION = "v1.3.0"  # 版本号，每次更新时修改
 
 # 服务器A的地址（您的 claude-code-hub 主服务）
 UPSTREAM_SERVER_A = "https://api.aimasker.com"
@@ -28,9 +28,10 @@ DEBUG_LOG = True
 
 
 def log(msg: str):
-    """打印调试日志"""
+    """日志输出"""
     if DEBUG_LOG:
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+        timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
+        print(f"{timestamp} {msg}")
 
 
 # =========================
@@ -42,31 +43,33 @@ async def root():
 
 
 @app.get("/v1/models")
-async def list_models():
-    """返回模型列表（可选：也可转发给服务器A）"""
-    return {
-        "object": "list",
-        "data": [
-            {"id": "gpt-5.2", "object": "model", "owned_by": "openai"},
-            {"id": "gpt-5.2-mini", "object": "model", "owned_by": "openai"},
-        ],
-    }
+async def models():
+    """返回模型列表（透传到服务器A）"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{UPSTREAM_SERVER_A}/v1/models") as resp:
+                data = await resp.json()
+                return JSONResponse(content=data)
+    except Exception as e:
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Failed to fetch models: {repr(e)}"}
+        )
 
 
 @app.get("/{uid}/v1/models")
-async def list_models_uid(uid: str):
-    """带 UID 的模型列表"""
-    return await list_models()
-
-
-@app.head("/{uid}")
-async def head_uid(uid: str):
-    return Response(status_code=200)
-
-
-@app.get("/{uid}")
-async def get_uid(uid: str):
-    return {"ok": True, "uid": uid, "proxy": "Server B"}
+async def models_with_uid(uid: str):
+    """返回模型列表（带 UID）"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{UPSTREAM_SERVER_A}/{uid}/v1/models") as resp:
+                data = await resp.json()
+                return JSONResponse(content=data)
+    except Exception as e:
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Failed to fetch models: {repr(e)}"}
+        )
 
 
 @app.get("/debug/info")
@@ -82,76 +85,8 @@ async def debug_info():
 
 
 # =========================
-# 核心代理逻辑：透传请求到服务器A
+# 聊天接口（主要逻辑）
 # =========================
-async def forward_to_server_a(
-    request_path: str,
-    request_headers: dict,
-    request_body: dict,
-) -> tuple[int, dict | str, dict]:
-    """
-    转发请求到服务器A
-    返回：(status_code, response_body, response_headers)
-    """
-    # 构建上游URL
-    upstream_url = f"{UPSTREAM_SERVER_A.rstrip('/')}/{request_path.lstrip('/')}"
-    
-    log(f"[forward] → {upstream_url}")
-    log(f"[forward] body: {request_body}")
-    
-    # 准备请求头（移除不必要的头）
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    
-    # 转发 Authorization 头
-    auth_header = request_headers.get("Authorization") or request_headers.get("authorization")
-    if auth_header:
-        headers["Authorization"] = auth_header
-        log(f"[forward] Authorization: {auth_header[:20]}..." if len(auth_header) > 20 else f"[forward] Authorization: {auth_header}")
-    else:
-        log(f"[forward] ⚠️ No Authorization header found!")
-    
-    # 设置超时
-    timeout = aiohttp.ClientTimeout(
-        total=UPSTREAM_TIMEOUT_SEC,
-        connect=CONNECT_TIMEOUT_SEC,
-        sock_connect=CONNECT_TIMEOUT_SEC,
-        sock_read=UPSTREAM_TIMEOUT_SEC,
-    )
-    
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(upstream_url, headers=headers, json=request_body) as resp:
-                status = resp.status
-                content_type = resp.headers.get("Content-Type", "application/json")
-                
-                # 如果是流式响应，返回原始响应
-                if "text/event-stream" in content_type:
-                    log(f"[forward] ← streaming response (status={status})")
-                    # 读取所有流式数据
-                    stream_data = await resp.read()
-                    return (status, stream_data, dict(resp.headers))
-                else:
-                    # 非流式响应
-                    try:
-                        data = await resp.json()
-                        log(f"[forward] ← JSON response (status={status})")
-                        return (status, data, dict(resp.headers))
-                    except Exception:
-                        text = await resp.text()
-                        log(f"[forward] ← text response (status={status})")
-                        return (status, text, dict(resp.headers))
-    
-    except asyncio.TimeoutError:
-        log(f"[forward] ✗ timeout")
-        return (504, {"error": "Gateway timeout to Server A"}, {})
-    except Exception as e:
-        log(f"[forward] ✗ error: {repr(e)}")
-        return (502, {"error": f"Failed to connect to Server A: {repr(e)}"}, {})
-
-
 @app.post("/v1/chat/completions")
 async def chat_default(req: Request):
     """默认聊天接口"""
@@ -178,34 +113,125 @@ async def chat_proxy(uid: str | None, req: Request):
     # 获取请求头
     request_headers = dict(req.headers)
     
-    # 转发到服务器A
-    status, response_body, response_headers = await forward_to_server_a(
-        request_path, request_headers, body
-    )
+    # 检查是否是流式请求
+    is_stream = body.get("stream", False)
     
-    # 处理流式响应
-    if isinstance(response_body, bytes) and b"data:" in response_body:
-        log(f"[proxy] → streaming response to client")
+    if is_stream:
+        # 流式响应：实时转发，逐块传输
+        log(f"[proxy] → streaming request")
         
-        async def stream_generator() -> AsyncGenerator[bytes, None]:
-            # 直接返回从服务器A获取的流式数据
-            yield response_body
+        async def stream_from_server_a() -> AsyncGenerator[bytes, None]:
+            """从服务器A实时流式读取并转发"""
+            upstream_url = f"{UPSTREAM_SERVER_A}/{request_path}"
+            log(f"[stream] → {upstream_url}")
+            
+            # 构建请求头
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            }
+            
+            # 转发 Authorization 头
+            auth_header = request_headers.get("Authorization") or request_headers.get("authorization")
+            if auth_header:
+                headers["Authorization"] = auth_header
+                if DEBUG_LOG:
+                    auth_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
+                    log(f"[stream] Authorization: {auth_preview}")
+            
+            # 创建超时配置
+            timeout = aiohttp.ClientTimeout(
+                total=UPSTREAM_TIMEOUT_SEC,
+                connect=CONNECT_TIMEOUT_SEC
+            )
+            
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(upstream_url, headers=headers, json=body) as resp:
+                        log(f"[stream] ← connected (status={resp.status})")
+                        
+                        # 逐块读取并实时转发
+                        chunk_count = 0
+                        async for chunk in resp.content.iter_any():
+                            if chunk:
+                                chunk_count += 1
+                                yield chunk
+                        
+                        log(f"[stream] ✓ completed ({chunk_count} chunks)")
+            
+            except asyncio.TimeoutError:
+                log(f"[stream] ✗ timeout after {UPSTREAM_TIMEOUT_SEC}s")
+                yield b'data: {"error": "Gateway timeout"}\n\n'
+            except Exception as e:
+                log(f"[stream] ✗ error: {repr(e)}")
+                import traceback
+                log(f"[stream] traceback: {traceback.format_exc()}")
+                yield f'data: {{"error": "Connection failed: {repr(e)}"}}\n\n'.encode()
         
         return StreamingResponse(
-            stream_generator(),
+            stream_from_server_a(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
+                "X-Accel-Buffering": "no",  # 关闭 Nginx 缓冲
             },
         )
     
-    # 返回普通响应
-    if isinstance(response_body, dict):
-        return JSONResponse(status_code=status, content=response_body)
     else:
-        return Response(status_code=status, content=response_body)
+        # 非流式响应：使用同步请求
+        log(f"[proxy] → non-streaming request")
+        upstream_url = f"{UPSTREAM_SERVER_A}/{request_path}"
+        log(f"[forward] → {upstream_url}")
+        
+        # 构建请求头
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        
+        # 转发 Authorization 头
+        auth_header = request_headers.get("Authorization") or request_headers.get("authorization")
+        if auth_header:
+            headers["Authorization"] = auth_header
+            if DEBUG_LOG:
+                auth_preview = auth_header[:20] + "..." if len(auth_header) > 20 else auth_header
+                log(f"[forward] Authorization: {auth_preview}")
+        
+        # 创建超时配置
+        timeout = aiohttp.ClientTimeout(
+            total=UPSTREAM_TIMEOUT_SEC,
+            connect=CONNECT_TIMEOUT_SEC
+        )
+        
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(upstream_url, headers=headers, json=body) as resp:
+                    status = resp.status
+                    
+                    try:
+                        data = await resp.json()
+                        log(f"[forward] ← JSON response (status={status})")
+                        return JSONResponse(status_code=status, content=data)
+                    except Exception:
+                        text = await resp.text()
+                        log(f"[forward] ← text response (status={status})")
+                        return Response(status_code=status, content=text)
+        
+        except asyncio.TimeoutError:
+            log(f"[forward] ✗ timeout after {UPSTREAM_TIMEOUT_SEC}s")
+            return JSONResponse(
+                status_code=504,
+                content={"error": "Gateway timeout to Server A"}
+            )
+        except Exception as e:
+            log(f"[forward] ✗ error: {repr(e)}")
+            import traceback
+            log(f"[forward] traceback: {traceback.format_exc()}")
+            return JSONResponse(
+                status_code=502,
+                content={"error": f"Failed to connect to Server A: {repr(e)}"}
+            )
 
 
 if __name__ == "__main__":
@@ -221,6 +247,7 @@ if __name__ == "__main__":
     print(f"⏱️  Upstream Timeout: {UPSTREAM_TIMEOUT_SEC}s")
     print(f"📝 Debug Log: {'Enabled' if DEBUG_LOG else 'Disabled'}")
     print(f"📦 Max Body Size: 100MB")
+    print(f"🌊 Streaming: Real-time chunked transfer")
     print("=" * 60)
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
