@@ -7,7 +7,9 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 import aiohttp
 
+# 配置 FastAPI 支持大文件（100MB）
 app = FastAPI()
+app.state.max_body_size = 100 * 1024 * 1024  # 100 MB
 
 # =========================
 # 配置
@@ -16,8 +18,8 @@ app = FastAPI()
 UPSTREAM_SERVER_A = "https://api.aimasker.com"
 
 # 连接超时设置（秒）
-CONNECT_TIMEOUT_SEC = 20
-UPSTREAM_TIMEOUT_SEC = 300
+CONNECT_TIMEOUT_SEC = 30
+UPSTREAM_TIMEOUT_SEC = 600  # 增加到 10 分钟，支持大图片传输
 
 # 调试日志（True=开启，False=关闭）
 DEBUG_LOG = True
