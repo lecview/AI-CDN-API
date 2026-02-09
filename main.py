@@ -30,6 +30,13 @@ DEBUG_LOG = True
 _http_session: aiohttp.ClientSession | None = None
 
 
+def log(msg: str):
+    """日志输出"""
+    if DEBUG_LOG:
+        timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
+        print(f"{timestamp} {msg}")
+
+
 async def get_http_session() -> aiohttp.ClientSession:
     """获取全局 HTTP Session（带连接池）"""
     global _http_session
@@ -55,13 +62,6 @@ async def get_http_session() -> aiohttp.ClientSession:
         log(f"[init] ✓ HTTP session created with connection pool")
     
     return _http_session
-
-
-def log(msg: str):
-    """日志输出"""
-    if DEBUG_LOG:
-        timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime())
-        print(f"{timestamp} {msg}")
 
 
 # =========================
@@ -176,12 +176,12 @@ async def chat_proxy(uid: str | None, req: Request):
                     
                     # 逐块读取并实时转发
                     chunk_count = 0
-                        async for chunk in resp.content.iter_any():
-                            if chunk:
-                                chunk_count += 1
-                                yield chunk
-                        
-                        log(f"[stream] ✓ completed ({chunk_count} chunks)")
+                    async for chunk in resp.content.iter_any():
+                        if chunk:
+                            chunk_count += 1
+                            yield chunk
+                    
+                    log(f"[stream] ✓ completed ({chunk_count} chunks)")
             
             except asyncio.TimeoutError:
                 log(f"[stream] ✗ timeout after {UPSTREAM_TIMEOUT_SEC}s")
@@ -229,12 +229,12 @@ async def chat_proxy(uid: str | None, req: Request):
                 
                 try:
                     data = await resp.json()
-                        log(f"[forward] ← JSON response (status={status})")
-                        return JSONResponse(status_code=status, content=data)
-                    except Exception:
-                        text = await resp.text()
-                        log(f"[forward] ← text response (status={status})")
-                        return Response(status_code=status, content=text)
+                    log(f"[forward] ← JSON response (status={status})")
+                    return JSONResponse(status_code=status, content=data)
+                except Exception:
+                    text = await resp.text()
+                    log(f"[forward] ← text response (status={status})")
+                    return Response(status_code=status, content=text)
         
         except asyncio.TimeoutError:
             log(f"[forward] ✗ timeout after {UPSTREAM_TIMEOUT_SEC}s")
@@ -266,6 +266,7 @@ if __name__ == "__main__":
     print(f"📝 Debug Log: {'Enabled' if DEBUG_LOG else 'Disabled'}")
     print(f"📦 Max Body Size: 100MB")
     print(f"🌊 Streaming: Real-time chunked transfer")
+    print(f"⚡ Connection Pool: Enabled (DNS cache: 5min)")
     print("=" * 60)
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
