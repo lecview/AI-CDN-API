@@ -101,8 +101,12 @@ async def forward_to_server_a(
     }
     
     # 转发 Authorization 头
-    if "Authorization" in request_headers:
-        headers["Authorization"] = request_headers["Authorization"]
+    auth_header = request_headers.get("Authorization") or request_headers.get("authorization")
+    if auth_header:
+        headers["Authorization"] = auth_header
+        log(f"[forward] Authorization: {auth_header[:20]}..." if len(auth_header) > 20 else f"[forward] Authorization: {auth_header}")
+    else:
+        log(f"[forward] ⚠️ No Authorization header found!")
     
     # 设置超时
     timeout = aiohttp.ClientTimeout(
