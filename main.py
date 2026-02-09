@@ -14,6 +14,8 @@ app.state.max_body_size = 100 * 1024 * 1024  # 100 MB
 # =========================
 # 配置
 # =========================
+VERSION = "v1.2.0-img"  # 版本号，每次更新时修改
+
 # 服务器A的地址（您的 claude-code-hub 主服务）
 UPSTREAM_SERVER_A = "https://api.aimasker.com"
 
@@ -36,7 +38,7 @@ def log(msg: str):
 # =========================
 @app.get("/")
 async def root():
-    return {"ok": True, "proxy": "Server B → Server A"}
+    return {"ok": True, "proxy": "Server B → Server A", "version": VERSION}
 
 
 @app.get("/v1/models")
@@ -71,6 +73,7 @@ async def get_uid(uid: str):
 async def debug_info():
     """调试信息"""
     return {
+        "version": VERSION,
         "proxy_name": "Server B Forwarder",
         "upstream_server_a": UPSTREAM_SERVER_A,
         "connect_timeout_sec": CONNECT_TIMEOUT_SEC,
@@ -207,4 +210,17 @@ async def chat_proxy(uid: str | None, req: Request):
 
 if __name__ == "__main__":
     import uvicorn
+    
+    # 启动时打印版本和配置信息
+    print("=" * 60)
+    print(f"🚀 Proxy Forwarder Starting - {VERSION}")
+    print("=" * 60)
+    print(f"📡 Upstream Server: {UPSTREAM_SERVER_A}")
+    print(f"🔌 Listening Port: 8000")
+    print(f"⏱️  Connect Timeout: {CONNECT_TIMEOUT_SEC}s")
+    print(f"⏱️  Upstream Timeout: {UPSTREAM_TIMEOUT_SEC}s")
+    print(f"📝 Debug Log: {'Enabled' if DEBUG_LOG else 'Disabled'}")
+    print(f"📦 Max Body Size: 100MB")
+    print("=" * 60)
+    
     uvicorn.run(app, host="0.0.0.0", port=8000)
